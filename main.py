@@ -1,3 +1,5 @@
+import json
+from dataclasses import asdict
 import config
 from parser import VulcanParser
 
@@ -9,23 +11,35 @@ def main():
     parser.initialize_teachers()
     print(f"[+] Parsed {len(parser.teachers_map)} teachers.")
     
-    print(f"\n[*] Parsing Target Class Timetable: {config.TARGET_CLASS_URL}")
+    print(f"\n[*] Parsing Target Class: {config.TARGET_CLASS_URL}")
     schedule = parser.parse_class_timetable(config.TARGET_CLASS_URL)
     
     target_day = "monday"
-    print(f"\n--- Output for: {target_day.upper()} ---")
-    
-    for slot in schedule[target_day].slots:
-        if slot.lessons:
-            lesson_details = []
-            for l in slot.lessons:
-                group_info = f" [Group: {l.group}]" if l.group else ""
-                teacher_info = f" (Teacher: {l.teacher_name or l.teacher_code})"
-                room_info = f" Room: {l.room}"
-                
-                lesson_details.append(f"{l.subject}{group_info}{teacher_info}{room_info}")
-                
-            print(f"{slot.number:2} ({slot.time}) | {'  AND  '.join(lesson_details)}")
+    if target_day in schedule:
+        print(f"\n--- Output for: {target_day.upper()} ---")
+        for slot in schedule[target_day].slots:
+            reg = f"{slot.regular_time.start}-{slot.regular_time.end}"
+            short = f"{slot.shortened_time.start}-{slot.shortened_time.end}"
+            
+            if slot.lessons:
+                lesson_details = [
+                    f"{l.subject}"
+                    f"{f' [Group: {l.group}]' if l.group else ''}"
+                    f"{f' [Hash: {l.hash_code}]' if l.hash_code else ''}"
+                    f" (Teacher: {l.teacher_name or l.teacher_code})"
+                    f" Room: {l.room}"
+                    for l in slot.lessons
+                ]
+                print(f"{slot.number:2} (Reg: {reg} | Short: {short}) | {' AND '.join(lesson_details)}")
+            else:
+                print(f"{slot.number:2} (Reg: {reg} | Short: {short}) | -")
+
+    if target_day in schedule:
+        print("\n--- Example JSON Structure for API Response ---")
+        day_dict = schedule[target_day].to_dict()
+        # Displaying first 2 slots serialized to JSON string
+        day_dict["slots"] = day_dict["slots"][:3]
+        print(json.dumps(day_dict, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

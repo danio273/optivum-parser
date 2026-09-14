@@ -31,6 +31,13 @@ class DaySchedule:
     day_name: str
     slots: List[Slot] = field(default_factory=list)
 
+@dataclass
+class ClassSchedule:
+    """Represents the full weekly schedule for a class."""
+    class_name: str
+    full_class_name: str
+    days: Dict[str, DaySchedule] = field(default_factory=dict)
+
     def to_dict(self) -> Dict[str, Any]:
         """Converts the model directly into a JSON-serializable dictionary."""
         return asdict(self)

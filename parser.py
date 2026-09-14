@@ -5,7 +5,7 @@ from bs4 import BeautifulSoup
 from typing import Dict, List, Optional, Tuple
 
 import config
-from models import Lesson, Slot, DaySchedule, TimeSlot
+from models import Lesson, Slot, DaySchedule, TimeSlot, ClassSchedule
 
 class VulcanParser:
     """Handles fetching and parsing of VULCAN Optivum HTML timetables."""
@@ -102,26 +102,40 @@ class VulcanParser:
             
         return subject, group, hash_code
 
-    def parse_class_timetable(self, target_url: str = config.TARGET_CLASS_URL) -> Dict[str, DaySchedule]:
-        """Parses a specific class timetable page into structured data."""
+    def parse_class_timetable(self, target_url: str = config.TARGET_CLASS_URL) -> Optional[ClassSchedule]:
+        """Parses a specific class timetable page into full weekly schedule structure."""
         if not self.is_class_active(target_url):
-            print(f"[!] Target class '{target_url}' is not active or present on the list. Returning empty schedule.")
-            return {}
+            print(f"[!] Target class '{target_url}' is not active or present on the list.")
+            return None
 
         full_url = urllib.parse.urljoin(config.LIST_URL, target_url)
         soup = self._fetch_soup(full_url)
         if not soup:
-            return {}
+            return None
+
+        title_tag = soup.find('span', class_='tytulnapis')
+        if title_tag:
+            full_class_name = title_tag.get_text(strip=True)
+        elif soup.title:
+            full_class_name = soup.title.get_text(strip=True).replace("Plan lekcji oddziału -", "").strip()
+        else:
+            full_class_name = ""
+
+        main_class_name = full_class_name.split()[0] if full_class_name else ""
 
         table = soup.find('table', class_='tabela')
         if not table:
-            return {}
+            return None
 
         headers = [th.get_text(strip=True) for th in table.find_all('th')]
         raw_days = headers[2:]
         days = [config.DAY_MAPPING.get(day, day) for day in raw_days]
         
-        schedule = {day: DaySchedule(day_name=day) for day in days}
+        class_schedule = ClassSchedule(
+            class_name=main_class_name,
+            full_class_name=full_class_name,
+            days={day: DaySchedule(day_name=day) for day in days}
+        )
         
         for row in table.find_all('tr'):
             cells = row.find_all('td')
@@ -143,15 +157,18 @@ class VulcanParser:
                 day_name = days[day_index]
                 parsed_lessons = self._parse_cell(cell)
                 
+                if not parsed_lessons:
+                    continue
+                
                 slot = Slot(
                     number=slot_number, 
                     regular_time=regular_time,
                     shortened_time=shortened_time,
                     lessons=parsed_lessons
                 )
-                schedule[day_name].slots.append(slot)
+                class_schedule.days[day_name].slots.append(slot)
                 
-        return schedule
+        return class_schedule
 
     def _parse_cell(self, cell) -> List[Lesson]:
         """Parses a single HTML table cell (`td`), handling multiple groups."""
@@ -160,7 +177,7 @@ class VulcanParser:
         parts = re.split(r'<br\s*/?>', html_content, flags=re.IGNORECASE)
         
         for part in parts:
-            if not part.strip():
+            if not part.strip() or part.strip() == '&nbsp;':
                 continue
                 
             part_soup = BeautifulSoup(part, 'html.parser')

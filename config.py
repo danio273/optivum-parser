@@ -52,7 +52,9 @@ GENERAL_SUBJECTS = {
     "religia": "Religia",
     "e_zdrowotna": "Edukacja zdrowotna",
     "wf": "Wychowanie fizyczne",
-    "zaj.z wych.": "Zajęcia z wychowawcą"
+    "zaj.z wych.": "Zajęcia z wychowawcą",
+    "e_obywatel.": "Edukacja obywatelska",
+    "bizn.i zarz.": "Biznes i zarządzanie"
 }
 
 # --- Day Normalization ---

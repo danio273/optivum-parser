@@ -4,6 +4,7 @@ from models import TimeSlot
 # --- Main Configuration ---
 LIST_URL = "https://plan.zse.bydgoszcz.pl/lista.html"
 TARGET_CLASS_URL = "https://plan.zse.bydgoszcz.pl/plany/o1.html"
+SUBSTITUTIONS_URL = "https://zastepstwa.zse.bydgoszcz.pl/"
 
 # --- Time Schedules ---
 REGULAR_SCHEDULE: Dict[int, TimeSlot] = {

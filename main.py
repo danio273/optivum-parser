@@ -1,76 +1,60 @@
-import config
+from fastapi import FastAPI, HTTPException
 from timetable_parser import TimetableParser
 from substitutions_parser import SubstitutionsParser
+from models import ClassSchedule, DaySchedule
 
-def main():
-    print(f"[*] Initializing timetable parser using List URL: {config.LIST_URL}")
-    tt_parser = TimetableParser()
-    
-    print("[*] Building dynamic teacher map...")
-    tt_parser.initialize_teachers()
-    print(f"[+] Parsed {len(tt_parser.teachers_map)} teachers.")
-    
-    print(f"\n[*] Parsing Target Class: {config.TARGET_CLASS_URL}")
-    schedule = tt_parser.parse_class_timetable(config.TARGET_CLASS_URL)
-    
-    if not schedule:
-        print("[!] Failed to parse timetable.")
-        return
+app = FastAPI(
+    title="Optivum Timetable API", 
+    description="Query weekly class schedules and dynamic daily substitutions.",
+    version="1.0.0"
+)
 
-    print(f"\n[*] Fetching substitutions directly from URL: {config.SUBSTITUTIONS_URL}")
-    sub_parser = SubstitutionsParser()
-    header_info, raw_subs = sub_parser.fetch_substitutions(config.SUBSTITUTIONS_URL)
-    
-    if header_info:
-        print(f"[+] Parsed substitutions for: {header_info.date} ({header_info.day_of_week})")
-        sub_parser.apply_substitutions(schedule, header_info, raw_subs)
-    else:
-        print("[!] Could not fetch or parse substitutions from URL.")
+tt_parser = TimetableParser()
+sub_parser = SubstitutionsParser()
 
-    print(f"\n=== SCHEDULE FOR CLASS: {schedule.class_name} (Full Name: '{schedule.full_class_name}') ===")
+@app.on_event("startup")
+def startup_event():
+    tt_parser.initialize_data()
 
-    for day_name, day_schedule in schedule.days.items():
-        print(f"\n--- {day_name.upper()} ---")
+@app.get("/classes")
+def get_available_classes():
+    if not tt_parser.classes_map:
+        raise HTTPException(status_code=503, detail="Class mapping not initialized or unavailable.")
+    return {class_id: data["name"] for class_id, data in tt_parser.classes_map.items()}
+
+@app.get("/schedule/weekly/{class_id}", response_model=ClassSchedule)
+def get_weekly_schedule(class_id: str):
+    if class_id not in tt_parser.classes_map:
+        raise HTTPException(status_code=404, detail=f"Class ID '{class_id}' does not exist.")
         
-        if day_schedule.header_info:
-            hi = day_schedule.header_info
-            if hi.last_update:
-                print(f"  [!] Substitutions for date: {hi.date} (Last update: {hi.last_update.day_of_week}, {hi.last_update.time})")
-            else:
-                print(f"  [!] Substitutions for date: {hi.date}")
+    schedule = tt_parser.parse_class_timetable(class_id)
+    if not schedule:
+        raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
+        
+    return schedule
 
-            if hi.is_shortened:
-                print("  [!] Note: Shortened lesson schedule applies.")
-            for s in hi.suspensions:
-                print(f"  [!] SUSPENSION: After {s.time} (after lesson period {s.after_lesson})")
-            for n in hi.general_notes:
-                print(f"  [i] Note: {n}")
-            print("")
+@app.get("/schedule/daily/{class_id}", response_model=DaySchedule)
+def get_daily_substitutions(class_id: str):
+    if class_id not in tt_parser.classes_map:
+        raise HTTPException(status_code=404, detail=f"Class ID '{class_id}' does not exist.")
+        
+    schedule = tt_parser.parse_class_timetable(class_id)
+    if not schedule:
+        raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
 
-        if not day_schedule.slots:
-            print("  No classes on this day.")
-            continue
-
-        for slot in day_schedule.slots:
-            reg = f"{slot.regular_time.start}-{slot.regular_time.end}"
-            short = f"{slot.shortened_time.start}-{slot.shortened_time.end}"
-            
-            lesson_details = []
-            for l in slot.lessons:
-                base_str = (
-                    f"{l.subject}"
-                    f"{f' [Group: {l.group}]' if l.group else ''}"
-                    f" (Teacher: {l.teacher_name or l.teacher_code}) Room: {l.room}"
-                )
-                
-                if l.substitution:
-                    sub = l.substitution
-                    sub_str = f" >> [SUBSTITUTION: '{sub.description}' | Substitute: {sub.substitute} | Notes: {sub.note}]"
-                    base_str += sub_str
-                    
-                lesson_details.append(base_str)
-                
-            print(f"  {slot.number:2} (Reg: {reg} | Short: {short}) | {' AND '.join(lesson_details)}")
+    header_info, raw_subs = sub_parser.fetch_substitutions()
+    
+    if not header_info or not header_info.day_of_week:
+        raise HTTPException(status_code=404, detail="No active substitution header found.")
+        
+    sub_parser.apply_substitutions(schedule, header_info, raw_subs)
+    
+    target_day = header_info.day_of_week
+    if target_day not in schedule.days:
+        raise HTTPException(status_code=404, detail=f"Substitutions target '{target_day}', which is not in the schedule.")
+        
+    return schedule.days[target_day]
 
 if __name__ == "__main__":
-    main()
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

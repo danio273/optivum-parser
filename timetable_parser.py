@@ -1,7 +1,9 @@
 import re
+import threading
 import requests
 from bs4 import BeautifulSoup
 from typing import Dict, List, Optional, Tuple
+from cachetools import TTLCache
 
 import config
 from models import Lesson, Slot, DaySchedule, ClassSchedule, TimeSlot
@@ -9,9 +11,13 @@ from models import Lesson, Slot, DaySchedule, ClassSchedule, TimeSlot
 class TimetableParser:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
-        self.teachers_map: Dict[str, str] = {}
-        self.classes_map: Dict[str, Dict[str, str]] = {}
         
+        self.index_cache = TTLCache(maxsize=1, ttl=config.SCHEDULE_TTL)
+        self.schedules_cache = TTLCache(maxsize=100, ttl=config.SCHEDULE_TTL)
+        
+        self.index_lock = threading.Lock()
+        self.schedule_lock = threading.Lock()
+
     def _fetch_soup(self, url: str) -> Optional[BeautifulSoup]:
         try:
             response = self.session.get(url, timeout=10)
@@ -21,39 +27,46 @@ class TimetableParser:
         except requests.RequestException:
             return None
 
-    def initialize_data(self):
+    def get_index_data(self) -> Tuple[Dict[str, str], Dict[str, dict]]:
+        with self.index_lock:
+            if 'data' in self.index_cache:
+                return self.index_cache['data']
+
         soup = self._fetch_soup(config.LIST_URL)
         if not soup:
             raise ValueError(f"Could not load main index from {config.LIST_URL}")
             
+        teachers_map, classes_map = {}, {}
+        
         teachers_header = soup.find('h4', string=re.compile("Nauczyciele", re.I))
-        if teachers_header:
-            ul = teachers_header.find_next_sibling('ul')
-            if ul:
-                for li in ul.find_all('li'):
-                    text = li.get_text(strip=True)
-                    match = re.search(r'^(.*?)\s*\((.*?)\)$', text)
-                    if match:
-                        raw_name, code = match.group(1).strip(), match.group(2).strip()
-                        clean_name = re.sub(r'^([A-ZŻŹĆŃŁŚÓĘĄa-zżźćńłśóęą]\.)([A-ZŻŹĆŃŁŚÓĘĄ])', r'\1 \2', raw_name)
-                        self.teachers_map[code] = clean_name
+        if teachers_header and (ul := teachers_header.find_next_sibling('ul')):
+            for li in ul.find_all('li'):
+                text = li.get_text(strip=True)
+                match = re.search(r'^(.*?)\s*\((.*?)\)$', text)
+                if match:
+                    raw_name, code = match.group(1).strip(), match.group(2).strip()
+                    clean_name = re.sub(r'^([A-ZŻŹĆŃŁŚÓĘĄa-zżźćńłśóęą]\.)([A-ZŻŹĆŃŁŚÓĘĄ])', r'\1 \2', raw_name)
+                    teachers_map[code] = clean_name
 
         classes_header = soup.find('h4', string=re.compile("Oddziały", re.I))
-        if classes_header:
-            ul = classes_header.find_next_sibling('ul')
-            if ul:
-                for a in ul.find_all('a', href=True):
-                    href = a['href']
-                    match = re.search(r'plany/(o\d+)\.html', href)
-                    if match:
-                        class_id = match.group(1)
-                        raw_name = a.get_text(strip=True)
-                        short_name = raw_name.split()[0] if raw_name else ""
-                        self.classes_map[class_id] = {
-                            "class_name": short_name,
-                            "full_class_name": raw_name,
-                            "url": f"{config.BASE_URL}{href}"
-                        }
+        if classes_header and (ul := classes_header.find_next_sibling('ul')):
+            for a in ul.find_all('a', href=True):
+                href = a['href']
+                match = re.search(r'plany/(o\d+)\.html', href)
+                if match:
+                    class_id = match.group(1)
+                    raw_name = a.get_text(strip=True)
+                    short_name = raw_name.split()[0] if raw_name else ""
+                    classes_map[class_id] = {
+                        "class_name": short_name,
+                        "full_class_name": raw_name,
+                        "url": f"{config.BASE_URL}{href}"
+                    }
+                    
+        data = (teachers_map, classes_map)
+        with self.index_lock:
+            self.index_cache['data'] = data
+        return data
 
     def _format_custom_subject(self, subject: str) -> str:
         subject = re.sub(r'\.(?=[^\s$])', '. ', subject)
@@ -95,22 +108,33 @@ class TimetableParser:
             
         return subject, group, hash_code
 
-    def parse_class_timetable(self, class_id: str) -> Optional[ClassSchedule]:
-        if class_id not in self.classes_map:
+    def get_class_schedule(self, class_id: str) -> Optional[ClassSchedule]:
+        teachers_map, classes_map = self.get_index_data()
+        if class_id not in classes_map:
             return None
 
-        url = self.classes_map[class_id]["url"]
+        with self.schedule_lock:
+            if class_id in self.schedules_cache:
+                return self.schedules_cache[class_id]
+
+        url = classes_map[class_id]["url"]
         soup = self._fetch_soup(url)
         if not soup:
             return None
 
+        schedule = self._parse_timetable_html(soup, class_id, classes_map, teachers_map)
+        if schedule:
+            with self.schedule_lock:
+                self.schedules_cache[class_id] = schedule
+        return schedule
+
+    def _parse_timetable_html(self, soup: BeautifulSoup, class_id: str, classes_map: dict, teachers_map: dict) -> Optional[ClassSchedule]:
         title_tag = soup.find('span', class_='tytulnapis')
         full_class_name = title_tag.get_text(strip=True) if title_tag else (soup.title.get_text(strip=True).replace("Plan lekcji oddziału -", "").strip() if soup.title else "")
         main_class_name = full_class_name.split()[0] if full_class_name else ""
 
-        if class_id in self.classes_map:
-            self.classes_map[class_id]["class_name"] = main_class_name
-            self.classes_map[class_id]["full_class_name"] = full_class_name
+        classes_map[class_id]["class_name"] = main_class_name
+        classes_map[class_id]["full_class_name"] = full_class_name
 
         table = soup.find('table', class_='tabela')
         if not table:
@@ -148,7 +172,7 @@ class TimetableParser:
             
             for day_index, cell in enumerate(cells[2:]):
                 day_name = days[day_index]
-                parsed_lessons = self._parse_cell(cell)
+                parsed_lessons = self._parse_cell(cell, teachers_map)
                 
                 if parsed_lessons:
                     class_schedule.days[day_name].slots.append(Slot(
@@ -160,7 +184,7 @@ class TimetableParser:
                 
         return class_schedule
 
-    def _parse_cell(self, cell) -> List[Lesson]:
+    def _parse_cell(self, cell, teachers_map: dict) -> List[Lesson]:
         lessons = []
         html_content = cell.decode_contents()
         parts = re.split(r'<br\s*/?>', html_content, flags=re.IGNORECASE)
@@ -184,7 +208,7 @@ class TimetableParser:
                 continue
                 
             clean_subject, group, hash_code = self.normalize_subject(raw_remaining_text)
-            teacher_name = self.teachers_map.get(teacher_code) if teacher_code else None
+            teacher_name = teachers_map.get(teacher_code) if teacher_code else None
                 
             lessons.append(Lesson(
                 subject=clean_subject,

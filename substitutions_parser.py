@@ -1,7 +1,9 @@
 import re
+import threading
 import requests
 from bs4 import BeautifulSoup
 from typing import List, Optional, Tuple
+from cachetools import TTLCache
 
 import config
 from models import (
@@ -11,8 +13,20 @@ from models import (
 class SubstitutionsParser:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
+        
+        self.cache = TTLCache(maxsize=1, ttl=config.SUBSTITUTIONS_TTL)
+        self.lock = threading.Lock()
 
-    def fetch_substitutions(self, url: str = config.SUBSTITUTIONS_URL) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
+    def get_substitutions(self) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
+        with self.lock:
+            if 'data' in self.cache:
+                return self.cache['data']
+            
+            data = self._fetch_substitutions()
+            self.cache['data'] = data
+            return data
+
+    def _fetch_substitutions(self, url: str = config.SUBSTITUTIONS_URL) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
         try:
             response = self.session.get(url, timeout=10)
             response.raise_for_status()

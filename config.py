@@ -5,6 +5,10 @@ BASE_URL = "https://plan.zse.bydgoszcz.pl/"
 LIST_URL = f"{BASE_URL}lista.html"
 SUBSTITUTIONS_URL = "https://zastepstwa.zse.bydgoszcz.pl/"
 
+# --- Caching Configuration ---
+SCHEDULE_TTL = 10800
+SUBSTITUTIONS_TTL = 300
+
 # --- Time Schedules ---
 REGULAR_SCHEDULE: Dict[int, dict] = {
     0: {"start": "07:05", "end": "07:50"},
@@ -38,7 +42,7 @@ SHORTENED_SCHEDULE: Dict[int, dict] = {
     12: {"start": "14:15", "end": "14:45"},
 }
 
-# --- Normalization ---
+# --- String Normalization ---
 GENERAL_SUBJECTS = {
     "j.polski": "Język polski",
     "j.angielski": "Język angielski",

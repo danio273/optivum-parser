@@ -1,3 +1,4 @@
+import copy
 from contextlib import asynccontextmanager
 from typing import Dict
 from fastapi import FastAPI, HTTPException
@@ -10,7 +11,10 @@ sub_parser = SubstitutionsParser()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    tt_parser.initialize_data()
+    try:
+        tt_parser.get_index_data()
+    except Exception:
+        pass
     yield
 
 app = FastAPI(
@@ -22,22 +26,25 @@ app = FastAPI(
 
 @app.get("/classes", response_model=Dict[str, ClassItem])
 def get_available_classes():
-    if not tt_parser.classes_map:
+    try:
+        _, classes_map = tt_parser.get_index_data()
+        return {
+            class_id: ClassItem(
+                class_name=data["class_name"],
+                full_class_name=data["full_class_name"]
+            )
+            for class_id, data in classes_map.items()
+        }
+    except ValueError:
         raise HTTPException(status_code=503, detail="Class mapping not initialized or unavailable.")
-    return {
-        class_id: ClassItem(
-            class_name=data["class_name"],
-            full_class_name=data["full_class_name"]
-        )
-        for class_id, data in tt_parser.classes_map.items()
-    }
 
 @app.get("/schedule/weekly/{class_id}", response_model=ClassSchedule)
 def get_weekly_schedule(class_id: str):
-    if class_id not in tt_parser.classes_map:
+    _, classes_map = tt_parser.get_index_data()
+    if class_id not in classes_map:
         raise HTTPException(status_code=404, detail=f"Class ID '{class_id}' does not exist.")
         
-    schedule = tt_parser.parse_class_timetable(class_id)
+    schedule = tt_parser.get_class_schedule(class_id)
     if not schedule:
         raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
         
@@ -45,25 +52,27 @@ def get_weekly_schedule(class_id: str):
 
 @app.get("/schedule/daily/{class_id}", response_model=DailySchedule)
 def get_daily_substitutions(class_id: str):
-    if class_id not in tt_parser.classes_map:
+    _, classes_map = tt_parser.get_index_data()
+    if class_id not in classes_map:
         raise HTTPException(status_code=404, detail=f"Class ID '{class_id}' does not exist.")
         
-    schedule = tt_parser.parse_class_timetable(class_id)
+    schedule = tt_parser.get_class_schedule(class_id)
     if not schedule:
         raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
 
-    header_info, raw_subs = sub_parser.fetch_substitutions()
-    
+    schedule_copy = copy.deepcopy(schedule)
+
+    header_info, raw_subs = sub_parser.get_substitutions()
     if not header_info or not header_info.day_of_week:
         raise HTTPException(status_code=404, detail="No active substitution header found.")
         
-    sub_parser.apply_substitutions(schedule, header_info, raw_subs)
+    sub_parser.apply_substitutions(schedule_copy, header_info, raw_subs)
     
     target_day = header_info.day_of_week
-    if target_day not in schedule.days:
+    if target_day not in schedule_copy.days:
         raise HTTPException(status_code=404, detail=f"Substitutions target '{target_day}', which is not in the schedule.")
         
-    day_schedule = schedule.days[target_day]
+    day_schedule = schedule_copy.days[target_day]
     
     daily_slots = [
         DailySlot(
@@ -75,8 +84,8 @@ def get_daily_substitutions(class_id: str):
     ]
 
     return DailySchedule(
-        class_name=schedule.class_name,
-        full_class_name=schedule.full_class_name,
+        class_name=schedule_copy.class_name,
+        full_class_name=schedule_copy.full_class_name,
         day_name=day_schedule.day_name,
         header_info=header_info,
         slots=daily_slots

@@ -73,7 +73,8 @@ class SubstitutionsParser:
         date = day_of_week = ""
         last_update = None
         is_shortened = False
-        suspensions, general_notes = [], []
+        suspension = None
+        general_notes = []
         
         for line in lines:
             line_lower = line.lower()
@@ -91,11 +92,11 @@ class SubstitutionsParser:
             elif "zawieszone" in line_lower:
                 time_m = re.search(r'godzinie\s+(\d{1,2})[.:](\d{2})', line_lower)
                 lesson_m = re.search(r'po\s+(\d+)\s+godzinie', line_lower)
-                suspensions.append(Suspension(
+                suspension = Suspension(
                     raw_text=line,
                     time=f"{time_m.group(1).zfill(2)}:{time_m.group(2)}" if time_m else None,
                     after_lesson=int(lesson_m.group(1)) if lesson_m else None
-                ))
+                )
             elif "skrócony" in line_lower:
                 is_shortened = True
             elif "rozkład godzinowy" not in line_lower:
@@ -105,7 +106,7 @@ class SubstitutionsParser:
                     
         return HeaderInfo(
             date=date, day_of_week=day_of_week, last_update=last_update,
-            is_shortened=is_shortened, suspensions=suspensions, general_notes=general_notes
+            is_shortened=is_shortened, suspension=suspension, general_notes=general_notes
         )
 
     def apply_substitutions(self, schedule: ClassSchedule, header_info: HeaderInfo, raw_subs: List[RawSubstitution]):

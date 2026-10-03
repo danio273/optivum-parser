@@ -47,9 +47,11 @@ class TimetableParser:
                     match = re.search(r'plany/(o\d+)\.html', href)
                     if match:
                         class_id = match.group(1)
-                        class_name = a.get_text(strip=True)
+                        raw_name = a.get_text(strip=True)
+                        short_name = raw_name.split()[0] if raw_name else ""
                         self.classes_map[class_id] = {
-                            "name": class_name,
+                            "class_name": short_name,
+                            "full_class_name": raw_name,
                             "url": f"{config.BASE_URL}{href}"
                         }
 
@@ -106,6 +108,10 @@ class TimetableParser:
         full_class_name = title_tag.get_text(strip=True) if title_tag else (soup.title.get_text(strip=True).replace("Plan lekcji oddziału -", "").strip() if soup.title else "")
         main_class_name = full_class_name.split()[0] if full_class_name else ""
 
+        if class_id in self.classes_map:
+            self.classes_map[class_id]["class_name"] = main_class_name
+            self.classes_map[class_id]["full_class_name"] = full_class_name
+
         table = soup.find('table', class_='tabela')
         if not table:
             return None
@@ -116,7 +122,13 @@ class TimetableParser:
         class_schedule = ClassSchedule(
             class_name=main_class_name,
             full_class_name=full_class_name,
-            days={day: DaySchedule(day_name=day) for day in days}
+            days={
+                day: DaySchedule(
+                    class_name=main_class_name,
+                    full_class_name=full_class_name,
+                    day_name=day
+                ) for day in days
+            }
         )
         
         for row in table.find_all('tr'):

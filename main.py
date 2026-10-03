@@ -1,26 +1,36 @@
+from contextlib import asynccontextmanager
+from typing import Dict
 from fastapi import FastAPI, HTTPException
 from timetable_parser import TimetableParser
 from substitutions_parser import SubstitutionsParser
-from models import ClassSchedule, DaySchedule
-
-app = FastAPI(
-    title="Optivum Timetable API", 
-    description="Query weekly class schedules and dynamic daily substitutions.",
-    version="1.0.0"
-)
+from models import ClassSchedule, DaySchedule, DailySchedule, DailySlot, ClassItem
 
 tt_parser = TimetableParser()
 sub_parser = SubstitutionsParser()
 
-@app.on_event("startup")
-def startup_event():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     tt_parser.initialize_data()
+    yield
 
-@app.get("/classes")
+app = FastAPI(
+    title="Optivum Timetable API", 
+    description="Query weekly class schedules and dynamic daily substitutions.",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+@app.get("/classes", response_model=Dict[str, ClassItem])
 def get_available_classes():
     if not tt_parser.classes_map:
         raise HTTPException(status_code=503, detail="Class mapping not initialized or unavailable.")
-    return {class_id: data["name"] for class_id, data in tt_parser.classes_map.items()}
+    return {
+        class_id: ClassItem(
+            class_name=data["class_name"],
+            full_class_name=data["full_class_name"]
+        )
+        for class_id, data in tt_parser.classes_map.items()
+    }
 
 @app.get("/schedule/weekly/{class_id}", response_model=ClassSchedule)
 def get_weekly_schedule(class_id: str):
@@ -33,7 +43,7 @@ def get_weekly_schedule(class_id: str):
         
     return schedule
 
-@app.get("/schedule/daily/{class_id}", response_model=DaySchedule)
+@app.get("/schedule/daily/{class_id}", response_model=DailySchedule)
 def get_daily_substitutions(class_id: str):
     if class_id not in tt_parser.classes_map:
         raise HTTPException(status_code=404, detail=f"Class ID '{class_id}' does not exist.")
@@ -53,7 +63,24 @@ def get_daily_substitutions(class_id: str):
     if target_day not in schedule.days:
         raise HTTPException(status_code=404, detail=f"Substitutions target '{target_day}', which is not in the schedule.")
         
-    return schedule.days[target_day]
+    day_schedule = schedule.days[target_day]
+    
+    daily_slots = [
+        DailySlot(
+            number=slot.number,
+            time=slot.shortened_time if header_info.is_shortened else slot.regular_time,
+            lessons=slot.lessons
+        )
+        for slot in day_schedule.slots
+    ]
+
+    return DailySchedule(
+        class_name=schedule.class_name,
+        full_class_name=schedule.full_class_name,
+        day_name=day_schedule.day_name,
+        header_info=header_info,
+        slots=daily_slots
+    )
 
 if __name__ == "__main__":
     import uvicorn

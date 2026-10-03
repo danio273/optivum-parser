@@ -24,7 +24,7 @@ class HeaderInfo(BaseModel):
     day_of_week: str
     last_update: Optional[PublicationInfo] = None
     is_shortened: bool = False
-    suspensions: List[Suspension] = Field(default_factory=list)
+    suspension: Optional[Suspension] = None
     general_notes: List[str] = Field(default_factory=list)
 
 class RawSubstitution(BaseModel):
@@ -49,12 +49,30 @@ class Slot(BaseModel):
     shortened_time: TimeSlot
     lessons: List[Lesson] = Field(default_factory=list)
 
+class DailySlot(BaseModel):
+    number: int
+    time: TimeSlot
+    lessons: List[Lesson] = Field(default_factory=list)
+
 class DaySchedule(BaseModel):
+    class_name: Optional[str] = None
+    full_class_name: Optional[str] = None
     day_name: str
     header_info: Optional[HeaderInfo] = None
     slots: List[Slot] = Field(default_factory=list)
+
+class DailySchedule(BaseModel):
+    class_name: str
+    full_class_name: str
+    day_name: str
+    header_info: Optional[HeaderInfo] = None
+    slots: List[DailySlot] = Field(default_factory=list)
 
 class ClassSchedule(BaseModel):
     class_name: str
     full_class_name: str
     days: Dict[str, DaySchedule] = Field(default_factory=dict)
+
+class ClassItem(BaseModel):
+    class_name: str
+    full_class_name: str

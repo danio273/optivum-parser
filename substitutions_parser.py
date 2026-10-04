@@ -6,15 +6,18 @@ from typing import List, Optional, Tuple
 from cachetools import TTLCache
 
 import config
+from config import settings
+from logger import get_logger
 from models import (
     ClassSchedule, HeaderInfo, RawSubstitution, Substitution, Suspension, PublicationInfo
 )
 
+logger = get_logger(__name__)
+
 class SubstitutionsParser:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
-        
-        self.cache = TTLCache(maxsize=1, ttl=config.SUBSTITUTIONS_TTL)
+        self.cache = TTLCache(maxsize=1, ttl=settings.SUBSTITUTIONS_TTL)
         self.lock = threading.Lock()
 
     def get_substitutions(self) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
@@ -26,13 +29,15 @@ class SubstitutionsParser:
             self.cache['data'] = data
             return data
 
-    def _fetch_substitutions(self, url: str = config.SUBSTITUTIONS_URL) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
+    def _fetch_substitutions(self, url: str = None) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
+        target_url = url or settings.SUBSTITUTIONS_URL
         try:
-            response = self.session.get(url, timeout=10)
+            response = self.session.get(target_url, timeout=10)
             response.raise_for_status()
             response.encoding = response.apparent_encoding or 'iso-8859-2'
             return self.parse_substitutions_html(response.text)
-        except requests.RequestException:
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch substitutions from {target_url}: {e}")
             return None, []
 
     def parse_substitutions_html(self, html_content: str) -> Tuple[Optional[HeaderInfo], List[RawSubstitution]]:
@@ -42,6 +47,7 @@ class SubstitutionsParser:
         
         table = soup.find('table')
         if not table:
+            logger.warning("No substitutions table found in the HTML content.")
             return None, []
             
         header_cell = soup.find('td', class_='st0')

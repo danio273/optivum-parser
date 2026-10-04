@@ -1,13 +1,24 @@
-from typing import Dict
+from typing import Dict, List
+from pydantic_settings import BaseSettings
 
-# --- Main Configuration ---
-BASE_URL = "https://plan.zse.bydgoszcz.pl/"
-LIST_URL = f"{BASE_URL}lista.html"
-SUBSTITUTIONS_URL = "https://zastepstwa.zse.bydgoszcz.pl/"
+class Settings(BaseSettings):
+    LOG_LEVEL: str = "INFO"
+    CORS_ORIGINS: List[str] = ["*"]
+    
+    # --- Main Configuration ---
+    BASE_URL: str = "https://plan.zse.bydgoszcz.pl/"
+    LIST_URL: str = "https://plan.zse.bydgoszcz.pl/lista.html"
+    SUBSTITUTIONS_URL: str = "https://zastepstwa.zse.bydgoszcz.pl/"
 
-# --- Caching Configuration ---
-SCHEDULE_TTL = 10800
-SUBSTITUTIONS_TTL = 300
+    # --- Caching Configuration ---
+    SCHEDULE_TTL: int = 10800
+    SUBSTITUTIONS_TTL: int = 300
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = 'utf-8'
+
+settings = Settings()
 
 # --- Time Schedules ---
 REGULAR_SCHEDULE: Dict[int, dict] = {

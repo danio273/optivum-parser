@@ -6,14 +6,18 @@ from typing import Dict, List, Optional, Tuple
 from cachetools import TTLCache
 
 import config
+from config import settings
+from logger import get_logger
 from models import Lesson, Slot, DaySchedule, ClassSchedule, TimeSlot
+
+logger = get_logger(__name__)
 
 class TimetableParser:
     def __init__(self, session: Optional[requests.Session] = None):
         self.session = session or requests.Session()
         
-        self.index_cache = TTLCache(maxsize=1, ttl=config.SCHEDULE_TTL)
-        self.schedules_cache = TTLCache(maxsize=100, ttl=config.SCHEDULE_TTL)
+        self.index_cache = TTLCache(maxsize=1, ttl=settings.SCHEDULE_TTL)
+        self.schedules_cache = TTLCache(maxsize=100, ttl=settings.SCHEDULE_TTL)
         
         self.index_lock = threading.Lock()
         self.schedule_lock = threading.Lock()
@@ -24,7 +28,8 @@ class TimetableParser:
             response.raise_for_status()
             response.encoding = response.apparent_encoding or 'utf-8'
             return BeautifulSoup(response.text, 'html.parser')
-        except requests.RequestException:
+        except requests.RequestException as e:
+            logger.error(f"Failed to fetch data from {url}: {e}")
             return None
 
     def get_index_data(self) -> Tuple[Dict[str, str], Dict[str, dict]]:
@@ -32,9 +37,10 @@ class TimetableParser:
             if 'data' in self.index_cache:
                 return self.index_cache['data']
 
-        soup = self._fetch_soup(config.LIST_URL)
+        soup = self._fetch_soup(settings.LIST_URL)
         if not soup:
-            raise ValueError(f"Could not load main index from {config.LIST_URL}")
+            logger.error(f"Could not load main index from {settings.LIST_URL}")
+            raise ValueError(f"Could not load main index from {settings.LIST_URL}")
             
         teachers_map, classes_map = {}, {}
         
@@ -60,7 +66,7 @@ class TimetableParser:
                     classes_map[class_id] = {
                         "class_name": short_name,
                         "full_class_name": raw_name,
-                        "url": f"{config.BASE_URL}{href}"
+                        "url": f"{settings.BASE_URL}{href}"
                     }
                     
         data = (teachers_map, classes_map)
@@ -109,8 +115,13 @@ class TimetableParser:
         return subject, group, hash_code
 
     def get_class_schedule(self, class_id: str) -> Optional[ClassSchedule]:
-        teachers_map, classes_map = self.get_index_data()
+        try:
+            teachers_map, classes_map = self.get_index_data()
+        except ValueError:
+            return None
+
         if class_id not in classes_map:
+            logger.warning(f"Class ID {class_id} not found in classes map.")
             return None
 
         with self.schedule_lock:
@@ -138,6 +149,7 @@ class TimetableParser:
 
         table = soup.find('table', class_='tabela')
         if not table:
+            logger.warning(f"No schedule table found in HTML for class {class_id}.")
             return None
 
         headers = [th.get_text(strip=True) for th in table.find_all('th')]
@@ -165,12 +177,15 @@ class TimetableParser:
             short_dict = config.SHORTENED_SCHEDULE.get(slot_number)
             
             if not reg_dict or not short_dict:
+                logger.debug(f"Missing schedule mappings for slot {slot_number}.")
                 continue
                 
             regular_time = TimeSlot(**reg_dict)
             shortened_time = TimeSlot(**short_dict)
             
             for day_index, cell in enumerate(cells[2:]):
+                if day_index >= len(days):
+                    break
                 day_name = days[day_index]
                 parsed_lessons = self._parse_cell(cell, teachers_map)
                 

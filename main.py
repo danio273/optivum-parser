@@ -2,20 +2,29 @@ import copy
 from contextlib import asynccontextmanager
 from typing import Dict
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+
+from config import settings
+from logger import get_logger
 from timetable_parser import TimetableParser
 from substitutions_parser import SubstitutionsParser
 from models import ClassSchedule, DaySchedule, DailySchedule, DailySlot, ClassItem
+
+logger = get_logger(__name__)
 
 tt_parser = TimetableParser()
 sub_parser = SubstitutionsParser()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    logger.info("Starting up application, initializing timetable index data...")
     try:
         tt_parser.get_index_data()
-    except Exception:
-        pass
+        logger.info("Index data successfully cached.")
+    except Exception as e:
+        logger.error(f"Failed to initialize index data during startup: {e}")
     yield
+    logger.info("Shutting down application...")
 
 app = FastAPI(
     title="Optivum Timetable API", 
@@ -24,7 +33,19 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-@app.get("/classes", response_model=Dict[str, ClassItem])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.get("/health", tags=["System"])
+def health_check():
+    return {"status": "ok"}
+
+@app.get("/classes", response_model=Dict[str, ClassItem], tags=["Timetable"])
 def get_available_classes():
     try:
         _, classes_map = tt_parser.get_index_data()
@@ -35,10 +56,11 @@ def get_available_classes():
             )
             for class_id, data in classes_map.items()
         }
-    except ValueError:
+    except ValueError as e:
+        logger.error(f"Error fetching available classes: {e}")
         raise HTTPException(status_code=503, detail="Class mapping not initialized or unavailable.")
 
-@app.get("/schedule/weekly/{class_id}", response_model=ClassSchedule)
+@app.get("/schedule/weekly/{class_id}", response_model=ClassSchedule, tags=["Timetable"])
 def get_weekly_schedule(class_id: str):
     _, classes_map = tt_parser.get_index_data()
     if class_id not in classes_map:
@@ -46,11 +68,12 @@ def get_weekly_schedule(class_id: str):
         
     schedule = tt_parser.get_class_schedule(class_id)
     if not schedule:
+        logger.error(f"Failed to parse schedule for class_id: {class_id}")
         raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
         
     return schedule
 
-@app.get("/schedule/daily/{class_id}", response_model=DailySchedule)
+@app.get("/schedule/daily/{class_id}", response_model=DailySchedule, tags=["Timetable"])
 def get_daily_substitutions(class_id: str):
     _, classes_map = tt_parser.get_index_data()
     if class_id not in classes_map:
@@ -58,12 +81,14 @@ def get_daily_substitutions(class_id: str):
         
     schedule = tt_parser.get_class_schedule(class_id)
     if not schedule:
+        logger.error(f"Failed to parse schedule for class_id: {class_id} during daily substitution check.")
         raise HTTPException(status_code=500, detail="Failed to parse the class timetable.")
 
     schedule_copy = copy.deepcopy(schedule)
 
     header_info, raw_subs = sub_parser.get_substitutions()
     if not header_info or not header_info.day_of_week:
+        logger.warning("No active substitution header found.")
         raise HTTPException(status_code=404, detail="No active substitution header found.")
         
     sub_parser.apply_substitutions(schedule_copy, header_info, raw_subs)
@@ -90,7 +115,3 @@ def get_daily_substitutions(class_id: str):
         header_info=header_info,
         slots=daily_slots
     )
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
